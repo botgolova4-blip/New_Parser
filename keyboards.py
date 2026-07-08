@@ -10,6 +10,23 @@ def main_menu_kb(is_connected: bool) -> InlineKeyboardMarkup:
     ])
 
 
+def channel_select_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Выбрать из моих каналов", callback_data="channel_from_list")],
+        [InlineKeyboardButton(text="🔗 Ввести ссылку", callback_data="channel_by_link")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+    ])
+
+
+def channels_list_kb(channels: list) -> InlineKeyboardMarkup:
+    """channels = list of (title, username_or_id)"""
+    buttons = []
+    for title, cid in channels:
+        buttons.append([InlineKeyboardButton(text=title, callback_data=f"pick_channel:{cid}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="start_parsing")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def parse_mode_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Указать диапазон дат", callback_data="mode_dates")],
