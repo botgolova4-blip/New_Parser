@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from pyrogram import Client
-from pyrogram.errors import FloodWait, ChatAdminRequired, ChannelPrivate, UsernameNotOccupied
+from pyrogram.errors import FloodWait, ChatAdminRequired, ChannelPrivate, UsernameNotOccupied, UserNotParticipant
 from pyrogram.types import Message
 from userbot import get_userbot
 
@@ -10,6 +10,21 @@ def extract_username(user) -> str | None:
     if user and user.username:
         return f"@{user.username.lower()}"
     return None
+
+
+async def check_membership(client: Client, channel: str) -> dict:
+    try:
+        member = await client.get_chat_member(channel, "me")
+        status = str(member.status).lower()
+        if any(s in status for s in ["member", "administrator", "owner", "creator"]):
+            return {"ok": True}
+        return {"error": "not_member"}
+    except UserNotParticipant:
+        return {"error": "not_member"}
+    except ChannelPrivate:
+        return {"error": "private"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 async def parse_channel(
@@ -30,6 +45,23 @@ async def parse_channel(
         channel = channel[len("t.me/"):]
     channel = channel.strip("/").strip()
 
+    # Проверка членства перед парсингом
+    membership = await check_membership(client, channel)
+    if not membership.get("ok"):
+        err = membership.get("error", "")
+        if err == "not_member":
+            raise RuntimeError(
+                "⛔ Вы не являетесь участником этого канала.\n"
+                "Вступите в канал и попробуйте снова."
+            )
+        elif err == "private":
+            raise RuntimeError(
+                "⛔ Канал приватный и недоступен.\n"
+                "Убедитесь что вы вступили в канал, затем попробуйте снова."
+            )
+        else:
+            raise RuntimeError(f"⛔ Нет доступа к каналу: {err}")
+
     limit = None
     skip = 0
 
@@ -49,29 +81,21 @@ async def parse_channel(
         async for message in client.get_chat_history(channel):
             if not isinstance(message, Message):
                 continue
-
             msg_date = message.date
-
             if date_to and msg_date > date_to:
                 continue
             if date_from and msg_date < date_from:
                 break
-
             if skip > 0:
                 skip -= 1
                 continue
-
             posts.append(message)
             total_fetched += 1
-
             if progress_callback:
                 await progress_callback(total_fetched)
-
             if limit and total_fetched >= limit:
                 break
-
             await asyncio.sleep(0)
-
     except FloodWait as e:
         await asyncio.sleep(e.value)
     except (ChannelPrivate, UsernameNotOccupied, ChatAdminRequired):
