@@ -10,9 +10,10 @@ class AuthStates(StatesGroup):
 
 
 class ParserStates(StatesGroup):
-    waiting_channel    = State()
-    waiting_mode_choice = State()
-    waiting_count      = State()
-    waiting_date_from  = State()
-    waiting_date_to    = State()
-    confirming         = State()
+    waiting_channel_choice = State()  # выбор способа: список или ссылка
+    waiting_channel_link   = State()  # ввод ссылки вручную
+    waiting_mode_choice    = State()  # выбор режима парсинга
+    waiting_count          = State()
+    waiting_date_from      = State()
+    waiting_date_to        = State()
+    confirming             = State()
