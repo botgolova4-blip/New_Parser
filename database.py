@@ -19,8 +19,19 @@ async def init_db():
                 connected INTEGER DEFAULT 0
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS auth_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                phone           TEXT,
+                phone_code_hash TEXT,
+                api_id          TEXT,
+                api_hash        TEXT
+            )
+        """)
         await db.commit()
 
+
+# ── parsed users ──────────────────────────────────────────────────────────────
 
 async def add_users(usernames: list) -> list:
     new_users = []
@@ -57,16 +68,16 @@ async def get_users_count() -> int:
     return row[0] if row else 0
 
 
+# ── userbot session ───────────────────────────────────────────────────────────
+
 async def save_session(phone: str, api_id: str, api_hash: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT INTO userbot_session (id, phone, api_id, api_hash, connected)
             VALUES (1, ?, ?, ?, 1)
             ON CONFLICT(id) DO UPDATE SET
-                phone    = excluded.phone,
-                api_id   = excluded.api_id,
-                api_hash = excluded.api_hash,
-                connected = 1
+                phone=excluded.phone, api_id=excluded.api_id,
+                api_hash=excluded.api_hash, connected=1
         """, (phone, api_id, api_hash))
         await db.commit()
 
@@ -74,7 +85,7 @@ async def save_session(phone: str, api_id: str, api_hash: str):
 async def get_session_info() -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT phone, api_id, api_hash, connected FROM userbot_session WHERE id = 1"
+            "SELECT phone, api_id, api_hash, connected FROM userbot_session WHERE id=1"
         )
         row = await cursor.fetchone()
     if row:
@@ -84,11 +95,42 @@ async def get_session_info() -> dict | None:
 
 async def disconnect_session():
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE userbot_session SET connected = 0 WHERE id = 1")
+        await db.execute("UPDATE userbot_session SET connected=0 WHERE id=1")
         await db.commit()
 
 
 async def clear_session():
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM userbot_session WHERE id = 1")
+        await db.execute("DELETE FROM userbot_session WHERE id=1")
+        await db.commit()
+
+
+# ── auth state (survives restarts) ───────────────────────────────────────────
+
+async def save_auth_state(phone: str, phone_code_hash: str, api_id: str, api_hash: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO auth_state (id, phone, phone_code_hash, api_id, api_hash)
+            VALUES (1, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                phone=excluded.phone, phone_code_hash=excluded.phone_code_hash,
+                api_id=excluded.api_id, api_hash=excluded.api_hash
+        """, (phone, phone_code_hash, api_id, api_hash))
+        await db.commit()
+
+
+async def get_auth_state() -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT phone, phone_code_hash, api_id, api_hash FROM auth_state WHERE id=1"
+        )
+        row = await cursor.fetchone()
+    if row:
+        return {"phone": row[0], "phone_code_hash": row[1], "api_id": row[2], "api_hash": row[3]}
+    return None
+
+
+async def clear_auth_state():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM auth_state WHERE id=1")
         await db.commit()
