@@ -1,5 +1,4 @@
 import os
-import asyncio
 from pyrogram import Client
 from pyrogram.errors import (
     FloodWait, SessionPasswordNeeded,
@@ -59,6 +58,8 @@ async def full_disconnect():
 
 
 async def auth_send_code(phone: str, api_id: int, api_hash: str) -> dict:
+    # Удаляем старые данные перед новым запросом
+    await clear_auth_state()
     for ext in ("", ".session"):
         path = SESSION_NAME + ext
         if os.path.exists(path):
@@ -70,6 +71,7 @@ async def auth_send_code(phone: str, api_id: int, api_hash: str) -> dict:
         sent = await client.send_code(phone)
         await client.disconnect()
 
+        # Сохраняем свежий hash сразу
         await save_auth_state(
             phone=phone,
             phone_code_hash=sent.phone_code_hash,
@@ -80,7 +82,7 @@ async def auth_send_code(phone: str, api_id: int, api_hash: str) -> dict:
     except FloodWait as e:
         return {"error": f"Слишком много попыток. Подождите {e.value} сек."}
     except Exception as e:
-        return {"error": f"{type(e).__name__}: {str(e)}"}
+        return {"error": f"[{type(e).__name__}] {str(e)}"}
 
 
 async def auth_sign_in(code: str) -> dict:
@@ -88,7 +90,7 @@ async def auth_sign_in(code: str) -> dict:
 
     auth = await get_auth_state()
     if not auth:
-        return {"error": "Сессия авторизации не найдена. Начните заново."}
+        return {"error": "Сессия не найдена. Начните подключение заново."}
 
     phone = auth["phone"]
     phone_code_hash = auth["phone_code_hash"]
@@ -110,7 +112,7 @@ async def auth_sign_in(code: str) -> dict:
     except SessionPasswordNeeded:
         return {"2fa": True}
     except (PhoneCodeInvalid, PhoneCodeExpired) as e:
-        return {"error": f"[{type(e).__name__}] {str(e)} | hash: {phone_code_hash[:10]}..."}
+        return {"error": f"[{type(e).__name__}] {str(e)}"}
     except Exception as e:
         return {"error": f"[{type(e).__name__}] {str(e)}"}
 
@@ -120,7 +122,7 @@ async def auth_check_password(password: str) -> dict:
 
     auth = await get_auth_state()
     if not auth:
-        return {"error": "Сессия авторизации не найдена. Начните заново."}
+        return {"error": "Сессия не найдена. Начните подключение заново."}
 
     api_id = int(auth["api_id"])
     api_hash = auth["api_hash"]
