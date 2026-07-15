@@ -1,10 +1,11 @@
 import os
+import asyncio
 from pyrogram import Client
 from pyrogram.errors import (
     FloodWait, SessionPasswordNeeded,
     PhoneCodeInvalid, PhoneCodeExpired,
 )
-from database import save_session, disconnect_session, clear_session
+from database import save_session, disconnect_session, clear_session, save_auth_state, get_auth_state, clear_auth_state
 
 SESSION_NAME = "userbot_session"
 
@@ -50,36 +51,33 @@ async def stop_userbot():
 async def full_disconnect():
     await stop_userbot()
     await clear_session()
+    await clear_auth_state()
     for ext in ("", ".session"):
         path = SESSION_NAME + ext
         if os.path.exists(path):
             os.remove(path)
 
 
-_auth_client: Client | None = None
-_auth_phone: str | None = None
-_auth_phone_code_hash: str | None = None
-_auth_api_id: int | None = None
-_auth_api_hash: str | None = None
-
-
 async def auth_send_code(phone: str, api_id: int, api_hash: str) -> dict:
-    global _auth_client, _auth_phone, _auth_phone_code_hash
-    global _auth_api_id, _auth_api_hash
-
+    # Clean old session files
     for ext in ("", ".session"):
         path = SESSION_NAME + ext
         if os.path.exists(path):
             os.remove(path)
 
     try:
-        _auth_client = Client(SESSION_NAME, api_id=api_id, api_hash=api_hash)
-        await _auth_client.connect()
-        sent = await _auth_client.send_code(phone)
-        _auth_phone = phone
-        _auth_phone_code_hash = sent.phone_code_hash
-        _auth_api_id = api_id
-        _auth_api_hash = api_hash
+        client = Client(SESSION_NAME, api_id=api_id, api_hash=api_hash)
+        await client.connect()
+        sent = await client.send_code(phone)
+        await client.disconnect()
+
+        # Save auth state to DB so it survives restarts
+        await save_auth_state(
+            phone=phone,
+            phone_code_hash=sent.phone_code_hash,
+            api_id=str(api_id),
+            api_hash=api_hash,
+        )
         return {"ok": True}
     except FloodWait as e:
         return {"error": f"Слишком много попыток. Подождите {e.value} сек."}
@@ -88,17 +86,27 @@ async def auth_send_code(phone: str, api_id: int, api_hash: str) -> dict:
 
 
 async def auth_sign_in(code: str) -> dict:
-    global _auth_client, _userbot, _is_connected
-    if not _auth_client or not _auth_phone:
-        return {"error": "Сначала отправьте номер телефона"}
+    global _userbot, _is_connected
+
+    # Load auth state from DB
+    auth = await get_auth_state()
+    if not auth:
+        return {"error": "Сессия авторизации не найдена. Начните заново."}
+
+    phone = auth["phone"]
+    phone_code_hash = auth["phone_code_hash"]
+    api_id = int(auth["api_id"])
+    api_hash = auth["api_hash"]
+
     try:
-        await _auth_client.sign_in(
-            _auth_phone, _auth_phone_code_hash, code.replace(" ", "")
-        )
-        await _auth_client.disconnect()
-        _auth_client = None
-        await save_session(_auth_phone, str(_auth_api_id), _auth_api_hash)
-        _userbot = Client(SESSION_NAME, api_id=_auth_api_id, api_hash=_auth_api_hash)
+        client = Client(SESSION_NAME, api_id=api_id, api_hash=api_hash)
+        await client.connect()
+        await client.sign_in(phone, phone_code_hash, code.replace(" ", ""))
+        await client.disconnect()
+        await clear_auth_state()
+
+        await save_session(phone, str(api_id), api_hash)
+        _userbot = Client(SESSION_NAME, api_id=api_id, api_hash=api_hash)
         await _userbot.start()
         _is_connected = True
         return {"ok": True}
@@ -111,15 +119,25 @@ async def auth_sign_in(code: str) -> dict:
 
 
 async def auth_check_password(password: str) -> dict:
-    global _auth_client, _userbot, _is_connected
-    if not _auth_client:
-        return {"error": "Сессия авторизации не найдена"}
+    global _userbot, _is_connected
+
+    auth = await get_auth_state()
+    if not auth:
+        return {"error": "Сессия авторизации не найдена. Начните заново."}
+
+    api_id = int(auth["api_id"])
+    api_hash = auth["api_hash"]
+    phone = auth["phone"]
+
     try:
-        await _auth_client.check_password(password)
-        await _auth_client.disconnect()
-        _auth_client = None
-        await save_session(_auth_phone, str(_auth_api_id), _auth_api_hash)
-        _userbot = Client(SESSION_NAME, api_id=_auth_api_id, api_hash=_auth_api_hash)
+        client = Client(SESSION_NAME, api_id=api_id, api_hash=api_hash)
+        await client.connect()
+        await client.check_password(password)
+        await client.disconnect()
+        await clear_auth_state()
+
+        await save_session(phone, str(api_id), api_hash)
+        _userbot = Client(SESSION_NAME, api_id=api_id, api_hash=api_hash)
         await _userbot.start()
         _is_connected = True
         return {"ok": True}
