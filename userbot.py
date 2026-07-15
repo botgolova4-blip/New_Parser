@@ -59,7 +59,6 @@ async def full_disconnect():
 
 
 async def auth_send_code(phone: str, api_id: int, api_hash: str) -> dict:
-    # Clean old session files
     for ext in ("", ".session"):
         path = SESSION_NAME + ext
         if os.path.exists(path):
@@ -71,7 +70,6 @@ async def auth_send_code(phone: str, api_id: int, api_hash: str) -> dict:
         sent = await client.send_code(phone)
         await client.disconnect()
 
-        # Save auth state to DB so it survives restarts
         await save_auth_state(
             phone=phone,
             phone_code_hash=sent.phone_code_hash,
@@ -82,13 +80,12 @@ async def auth_send_code(phone: str, api_id: int, api_hash: str) -> dict:
     except FloodWait as e:
         return {"error": f"Слишком много попыток. Подождите {e.value} сек."}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"{type(e).__name__}: {str(e)}"}
 
 
 async def auth_sign_in(code: str) -> dict:
     global _userbot, _is_connected
 
-    # Load auth state from DB
     auth = await get_auth_state()
     if not auth:
         return {"error": "Сессия авторизации не найдена. Начните заново."}
@@ -112,10 +109,10 @@ async def auth_sign_in(code: str) -> dict:
         return {"ok": True}
     except SessionPasswordNeeded:
         return {"2fa": True}
-    except (PhoneCodeInvalid, PhoneCodeExpired):
-        return {"error": "Неверный или истёкший код. Попробуйте снова."}
+    except (PhoneCodeInvalid, PhoneCodeExpired) as e:
+        return {"error": f"[{type(e).__name__}] {str(e)} | hash: {phone_code_hash[:10]}..."}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"[{type(e).__name__}] {str(e)}"}
 
 
 async def auth_check_password(password: str) -> dict:
@@ -142,4 +139,4 @@ async def auth_check_password(password: str) -> dict:
         _is_connected = True
         return {"ok": True}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"[{type(e).__name__}] {str(e)}"}
