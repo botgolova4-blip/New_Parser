@@ -19,18 +19,33 @@ def channel_select_kb() -> InlineKeyboardMarkup:
 
 
 def channels_list_kb(channels: list) -> InlineKeyboardMarkup:
-    """channels = list of (title, username_or_id)"""
     buttons = []
     for title, cid in channels:
-        buttons.append([InlineKeyboardButton(text=title, callback_data=f"pick_channel:{cid}")])
+        short = title[:30] + "…" if len(title) > 30 else title
+        buttons.append([InlineKeyboardButton(text=short, callback_data=f"pick_channel:{cid}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="start_parsing")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def topics_list_kb(topics: list, channel: str) -> InlineKeyboardMarkup:
+    """topics = list of (id, title)"""
+    buttons = []
+    for tid, title in topics:
+        short = title[:30] + "…" if len(title) > 30 else title
+        buttons.append([InlineKeyboardButton(
+            text=f"💬 {short}",
+            callback_data=f"pick_topic:{tid}"
+        )])
+    buttons.append([InlineKeyboardButton(text="📥 Все темы сразу", callback_data="pick_topic:all")])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="start_parsing")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def parse_mode_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📅 Указать диапазон дат", callback_data="mode_dates")],
+        [InlineKeyboardButton(text="📥 Все посты", callback_data="mode_all")],
         [InlineKeyboardButton(text="🔢 Указать количество постов", callback_data="mode_count")],
+        [InlineKeyboardButton(text="📅 Указать диапазон дат", callback_data="mode_dates")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
     ])
 
