@@ -9,12 +9,12 @@ from config import ADMIN_IDS
 from database import get_all_users, get_users_count, add_users, get_session_info
 from states import AuthStates, ParserStates
 from keyboards import (
-    main_menu_kb, channel_select_kb, channels_list_kb,
+    main_menu_kb, channel_select_kb, channels_list_kb, topics_list_kb,
     parse_mode_kb, confirm_parse_kb,
     running_kb, done_kb, cancel_kb, disconnect_kb,
 )
 import userbot as ub
-from parser import parse_channel
+from parser import parse_channel, get_forum_topics
 
 router = Router()
 
@@ -52,7 +52,7 @@ async def noop(call: CallbackQuery):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  ПОДКЛЮЧЕНИЕ АККАУНТА через Session String
+#  ПОДКЛЮЧЕНИЕ АККАУНТА
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "connect_account")
@@ -70,8 +70,7 @@ async def connect_account(call: CallbackQuery, state: FSMContext):
         )
         return
     await call.message.edit_text(
-        "🔑 <b>Шаг 1 из 3 — API ID</b>\n\n"
-        "Введите ваш <b>API ID</b> (число с my.telegram.org):",
+        "🔑 <b>Шаг 1 из 3 — API ID</b>\n\nВведите ваш <b>API ID</b> (число с my.telegram.org):",
         parse_mode="HTML",
         reply_markup=cancel_kb(),
     )
@@ -104,8 +103,7 @@ async def got_api_hash(message: Message, state: FSMContext):
     await message.answer(
         "🔑 <b>Шаг 3 из 3 — Session String</b>\n\n"
         "Введите ваш <b>Session String</b>.\n\n"
-        "Как получить — запустите скрипт <code>generate_session.py</code> "
-        "на своём компьютере.",
+        "Как получить — запустите скрипт <code>generate_session.py</code> на своём компьютере.",
         parse_mode="HTML", reply_markup=cancel_kb(),
     )
     await state.set_state(AuthStates.waiting_code)
@@ -118,29 +116,23 @@ async def got_session_string(message: Message, state: FSMContext):
     session_string = message.text.strip()
     data = await state.get_data()
     msg = await message.answer("⏳ Подключаю аккаунт...")
-
     result = await ub.auth_via_session_string(
         session_string=session_string,
         api_id=data["api_id"],
         api_hash=data["api_hash"],
     )
-
     if result.get("ok"):
         await state.clear()
-        name = result.get("name", "")
-        phone = result.get("phone", "")
         await msg.edit_text(
             f"✅ <b>Аккаунт успешно подключён!</b>\n"
-            f"👤 {name} | 📱 {phone}",
+            f"👤 {result.get('name','')} | 📱 {result.get('phone','')}",
             parse_mode="HTML",
             reply_markup=main_menu_kb(True),
         )
     else:
         await msg.edit_text(
-            f"❌ Ошибка подключения:\n<code>{result['error']}</code>\n\n"
-            f"Проверьте Session String и попробуйте снова.",
-            parse_mode="HTML",
-            reply_markup=cancel_kb(),
+            f"❌ Ошибка:\n<code>{result['error']}</code>",
+            parse_mode="HTML", reply_markup=cancel_kb(),
         )
 
 
@@ -149,10 +141,8 @@ async def disconnect_account(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
     await ub.full_disconnect()
-    await call.message.edit_text(
-        "🔌 <b>Аккаунт отключён.</b>",
-        parse_mode="HTML", reply_markup=main_menu_kb(False),
-    )
+    await call.message.edit_text("🔌 <b>Аккаунт отключён.</b>",
+                                  parse_mode="HTML", reply_markup=main_menu_kb(False))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -178,14 +168,13 @@ async def show_results(call: CallbackQuery):
         )
     else:
         doc = BufferedInputFile("\n".join(users).encode(), filename=f"parsed_{count}.txt")
-        await call.message.answer_document(
-            doc, caption=f"📋 Всего: <b>{count}</b> пользователей", parse_mode="HTML"
-        )
+        await call.message.answer_document(doc,
+            caption=f"📋 Всего: <b>{count}</b> пользователей", parse_mode="HTML")
         await call.message.edit_reply_markup(reply_markup=main_menu_kb(ub.is_connected()))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  ПАРСИНГ
+#  ПАРСИНГ — выбор канала
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "start_parsing")
@@ -229,17 +218,35 @@ async def channel_from_list(call: CallbackQuery, state: FSMContext):
         await msg.edit_text(f"❌ Ошибка: {e}", reply_markup=channel_select_kb())
 
 
+async def _after_channel_selected(call: CallbackQuery, state: FSMContext, channel: str):
+    """Called after channel is picked — check for forum topics."""
+    await state.update_data(channel=channel, topic_id=None)
+    msg = await call.message.edit_text("⏳ Проверяю канал...")
+
+    topics = await get_forum_topics(channel)
+    if topics:
+        await state.update_data(topics=[(tid, title) for tid, title in topics])
+        await state.set_state(ParserStates.waiting_topic_choice)
+        await msg.edit_text(
+            f"💬 <b>Группа с темами</b>\n\nВыберите тему для парсинга:",
+            parse_mode="HTML",
+            reply_markup=topics_list_kb(topics, channel),
+        )
+    else:
+        await state.set_state(ParserStates.waiting_mode_choice)
+        await msg.edit_text(
+            f"📡 Канал: <code>{channel}</code>\n\nВыберите режим парсинга:",
+            parse_mode="HTML",
+            reply_markup=parse_mode_kb(),
+        )
+
+
 @router.callback_query(F.data.startswith("pick_channel:"))
 async def pick_channel(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer()
     channel = call.data.split(":", 1)[1]
-    await state.update_data(channel=channel)
-    await state.set_state(ParserStates.waiting_mode_choice)
-    await call.message.edit_text(
-        f"📡 Канал: <code>{channel}</code>\n\nВыберите режим парсинга:",
-        parse_mode="HTML", reply_markup=parse_mode_kb(),
-    )
+    await _after_channel_selected(call, state, channel)
 
 
 @router.callback_query(F.data == "channel_by_link")
@@ -257,11 +264,56 @@ async def channel_by_link(call: CallbackQuery, state: FSMContext):
 async def got_channel_link(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
+
+    class FakeCall:
+        def __init__(self, msg):
+            self.message = msg
+        async def answer(self):
+            pass
+
     await state.update_data(channel=message.text.strip())
+    fake = FakeCall(message)
+    # Send a new message to act as the editable message
+    sent = await message.answer("⏳")
+    fake.message = sent
+    await _after_channel_selected(fake, state, message.text.strip())
+
+
+# ── Выбор темы форума ─────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("pick_topic:"))
+async def pick_topic(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    topic_raw = call.data.split(":", 1)[1]
+    if topic_raw == "all":
+        await state.update_data(topic_id=None)
+    else:
+        await state.update_data(topic_id=int(topic_raw))
     await state.set_state(ParserStates.waiting_mode_choice)
-    await message.answer(
-        f"📡 Канал: <code>{message.text.strip()}</code>\n\nВыберите режим:",
-        parse_mode="HTML", reply_markup=parse_mode_kb(),
+    data = await state.get_data()
+    topic_label = "Все темы" if topic_raw == "all" else f"Тема #{topic_raw}"
+    await call.message.edit_text(
+        f"📡 Канал: <code>{data['channel']}</code>\n"
+        f"💬 {topic_label}\n\nВыберите режим парсинга:",
+        parse_mode="HTML",
+        reply_markup=parse_mode_kb(),
+    )
+
+
+# ── Режим парсинга ────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "mode_all")
+async def mode_all(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    await state.update_data(mode="all", count_value=None)
+    data = await state.get_data()
+    await state.set_state(ParserStates.confirming)
+    await call.message.edit_text(
+        f"✅ Канал: <code>{data['channel']}</code>\n"
+        f"📌 Режим: все посты\n\nНажмите «Запустить»:",
+        parse_mode="HTML", reply_markup=confirm_parse_kb(),
     )
 
 
@@ -329,10 +381,8 @@ async def got_date_from(message: Message, state: FSMContext):
         return await message.answer("❌ Формат: <code>ДД.ММ.ГГГГ</code>", parse_mode="HTML")
     await state.update_data(date_from=dt.isoformat())
     await state.set_state(ParserStates.waiting_date_to)
-    await message.answer(
-        "📅 Введите дату конца (<code>ДД.ММ.ГГГГ</code>):",
-        parse_mode="HTML", reply_markup=cancel_kb(),
-    )
+    await message.answer("📅 Введите дату конца (<code>ДД.ММ.ГГГГ</code>):",
+                         parse_mode="HTML", reply_markup=cancel_kb())
 
 
 @router.message(ParserStates.waiting_date_to)
@@ -348,10 +398,15 @@ async def got_date_to(message: Message, state: FSMContext):
     d_from = datetime.fromisoformat(data["date_from"]).strftime("%d.%m.%Y")
     await state.set_state(ParserStates.confirming)
     await message.answer(
-        f"✅ Канал: <code>{data['channel']}</code>\n📅 {d_from} — {dt_to.strftime('%d.%m.%Y')}\n\nНажмите «Запустить»:",
+        f"✅ Канал: <code>{data['channel']}</code>\n"
+        f"📅 {d_from} — {dt_to.strftime('%d.%m.%Y')}\n\nНажмите «Запустить»:",
         parse_mode="HTML", reply_markup=confirm_parse_kb(),
     )
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ЗАПУСК
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "run_parser")
 async def run_parser(call: CallbackQuery, state: FSMContext):
@@ -361,8 +416,9 @@ async def run_parser(call: CallbackQuery, state: FSMContext):
     await state.clear()
 
     channel     = data.get("channel", "")
-    mode        = data.get("mode", "count")
+    mode        = data.get("mode", "all")
     count_value = data.get("count_value")
+    topic_id    = data.get("topic_id")
     date_from   = datetime.fromisoformat(data["date_from"]) if data.get("date_from") else None
     date_to     = datetime.fromisoformat(data["date_to"])   if data.get("date_to")   else None
 
@@ -384,33 +440,24 @@ async def run_parser(call: CallbackQuery, state: FSMContext):
 
         raw = await parse_channel(
             channel=channel, mode=mode, count_value=count_value,
-            date_from=date_from, date_to=date_to, progress_callback=progress,
+            date_from=date_from, date_to=date_to,
+            topic_id=topic_id,
+            progress_callback=progress,
         )
         new_users = await add_users(raw)
         total_db  = await get_users_count()
 
         if not new_users:
-            text = (
-                f"✅ <b>Завершено</b>\n\n"
-                f"Найдено: {len(raw)} | Новых: <b>0</b> | В базе: {total_db}\n\n"
-                f"Все уже в базе."
-            )
+            text = (f"✅ <b>Завершено</b>\n\nНайдено: {len(raw)} | Новых: <b>0</b> | В базе: {total_db}\n\nВсе уже в базе.")
         else:
             preview = "\n".join(new_users[:100])
             suffix  = f"\n…ещё {len(new_users)-100}" if len(new_users) > 100 else ""
-            text = (
-                f"✅ <b>Завершено</b>\n\n"
-                f"Найдено: {len(raw)} | Новых: <b>{len(new_users)}</b> | В базе: {total_db}\n\n"
-                f"{preview}{suffix}"
-            )
+            text = (f"✅ <b>Завершено</b>\n\nНайдено: {len(raw)} | Новых: <b>{len(new_users)}</b> | В базе: {total_db}\n\n{preview}{suffix}")
 
         await status_msg.edit_text(text, parse_mode="HTML", reply_markup=done_kb())
 
         if len(new_users) > 100:
-            doc = BufferedInputFile(
-                "\n".join(new_users).encode(),
-                filename=f"new_{len(new_users)}.txt",
-            )
+            doc = BufferedInputFile("\n".join(new_users).encode(), filename=f"new_{len(new_users)}.txt")
             await call.message.answer_document(doc, caption=f"📄 Полный список ({len(new_users)} шт.)")
 
     except Exception as e:
